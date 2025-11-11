@@ -1,0 +1,23 @@
+{
+  "name": "img-optimize",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "NODE_ENV=local node index.js",
+    "start:prod": "NODE_ENV=production node index.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0",
+    "node-fetch": "^3.3.2",
+    "redis": "^4.6.13",
+    "sharp": "^0.34.4",
+    "url": "^0.11.4",
+    "winston": "^3.18.3",
+    "winston-daily-rotate-file": "^5.0.0"
+  }
+}

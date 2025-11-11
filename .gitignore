@@ -1,0 +1,8 @@
+.env
+.env.production
+node_modules/
+image-proxy.log
+package-lock.json
+.idea/
+.vscode/
+logs/
