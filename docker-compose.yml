@@ -5,7 +5,7 @@ services:
     image: redis:6.2.6-alpine
     ports: # 바인딩할 포트:내부 포트
       - 16379:6379
-    command: /bin/sh -c "redis-server /usr/local/etc/redis/redis.conf --requirepass motherisbest"
+    command: /bin/sh -c "redis-server /usr/local/etc/redis/redis.conf --requirepass replace-with-secret"
     volumes: # 마운트할 볼륨 설정
       - ./docker/redis:/data
       - ./docker/redis_conf:/usr/local/etc/redis/redis.conf
