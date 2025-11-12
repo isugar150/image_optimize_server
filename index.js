@@ -14,6 +14,11 @@ dotenv.config({ path: envPath });
 
 // Configurable variables
 const PORT = parseInt(process.env.PORT || '3000', 10);
+// Networking and resource guards
+const ORIGIN_TIMEOUT_MS = parseInt(process.env.ORIGIN_TIMEOUT_MS || '5000', 10);
+const ORIGIN_MAX_BYTES = parseInt(process.env.ORIGIN_MAX_BYTES || '10485760', 10); // 10 MB default
+const OUTPUT_MAX_BYTES = parseInt(process.env.OUTPUT_MAX_BYTES || '10485760', 10); // 10 MB default
+const SHARP_MAX_PIXELS = parseInt(process.env.SHARP_MAX_PIXELS || '16000000', 10); // ~16 MP
 const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
 const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
@@ -298,24 +303,68 @@ app.get('/', async (req, res) => {
       return res.status(504).send('Image processing in progress, please retry');
     }
 
-    const response = await fetch(originUrl.toString(), {
-      redirect: 'follow',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
-        'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Referer': refererHeader,
-      },
-    });
-    if (!response.ok) {
-      const ct = response.headers.get('content-type');
-      logger.error(`Origin fetch failed: ${originUrl.toString()} [${response.status}] ct=${ct || 'n/a'}`);
+    // Guarded fetch with timeout and size cap
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      try { controller.abort(); } catch (_) {}
+    }, ORIGIN_TIMEOUT_MS);
+    let imageBuffer;
+    try {
+      const response = await fetch(originUrl.toString(), {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+          'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+          'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Referer': refererHeader,
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const ct = response.headers.get('content-type');
+        logger.error(`Origin fetch failed: ${originUrl.toString()} [${response.status}] ct=${ct || 'n/a'}`);
+        try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
+        return res.status(502).send('Failed to fetch image from origin');
+      }
+      const clHeader = response.headers.get('content-length');
+      if (clHeader) {
+        const cl = parseInt(clHeader, 10);
+        if (Number.isFinite(cl) && cl > ORIGIN_MAX_BYTES) {
+          logger.warn(`Origin content-length too large: ${cl} > ${ORIGIN_MAX_BYTES}`);
+          try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
+          return res.status(413).send('Origin image too large');
+        }
+      }
+      // Stream and cap by ORIGIN_MAX_BYTES
+      const chunks = [];
+      let total = 0;
+      for await (const chunk of response.body) {
+        total += chunk.length;
+        if (total > ORIGIN_MAX_BYTES) {
+          logger.warn(`Origin stream exceeded max bytes: ${total} > ${ORIGIN_MAX_BYTES}`);
+          try { controller.abort(); } catch (_) {}
+          try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
+          return res.status(413).send('Origin image too large');
+        }
+        chunks.push(chunk);
+      }
+      imageBuffer = Buffer.concat(chunks);
+      logger.info(`Origin fetched: ${originUrl.toString()}, ${imageBuffer.length} bytes`);
+    } catch (e) {
+      const isAbort = e && (e.name === 'AbortError' || String(e).includes('AbortError'));
+      if (isAbort) {
+        logger.warn(`Origin fetch timeout after ${ORIGIN_TIMEOUT_MS}ms: ${originUrl.toString()}`);
+        try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
+        return res.status(504).send('Origin fetch timeout');
+      }
+      logger.error(`Origin fetch error: ${e.message || String(e)}`);
+      try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
       return res.status(502).send('Failed to fetch image from origin');
+    } finally {
+      clearTimeout(timeoutId);
     }
-    const imageBuffer = await response.buffer();
-    logger.info(`Origin fetched: ${originUrl.toString()}, ${imageBuffer.length} bytes`);
 
-    let transformer = sharp(imageBuffer).webp();
+    let transformer = sharp(imageBuffer, { limitInputPixels: SHARP_MAX_PIXELS }).webp();
     if (width || height) {
       logger.info(`Resizing: w=${width}, h=${height}`);
       transformer = transformer.resize(width || null, height || null, {
@@ -324,6 +373,12 @@ app.get('/', async (req, res) => {
       });
     }
     const optimizedBuffer = await transformer.toBuffer();
+    if (optimizedBuffer.length > OUTPUT_MAX_BYTES) {
+      logger.warn(`Output buffer too large: ${optimizedBuffer.length} > ${OUTPUT_MAX_BYTES}`);
+      // Ensure lock is released before returning
+      try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
+      return res.status(413).send('Optimized image too large');
+    }
     logger.info(`Image processed: webp, final size=${optimizedBuffer.length} bytes`);
 
     // Store in Redis with TTL
@@ -349,7 +404,12 @@ app.get('/', async (req, res) => {
     } else {
       res.set('X-Cache', 'MISS-NO-REDIS');
     }
-    res.send(optimizedBuffer);
+    try {
+      res.send(optimizedBuffer);
+    } finally {
+      // Safety: release lock on any send error too
+      try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
+    }
   } catch (err) {
     logger.error(`Error: ${err.toString()}`);
     res.status(500).send('Internal Server Error');

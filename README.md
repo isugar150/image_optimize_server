@@ -35,6 +35,10 @@
 | `LOCK_WAIT_TIMEOUT_MS` | `10000` | 다른 워커의 락을 기다리는 최대 시간(밀리초) |
 | `LOCK_RETRY_DELAY_MS` | `150` | 락 재시도 간격(밀리초) |
 | `LOG_LEVEL` | `info` | Winston 로그 레벨 |
+| `ORIGIN_TIMEOUT_MS` | `5000` | 원본 서버 응답 타임아웃(밀리초). 초과 시 504 응답 |
+| `ORIGIN_MAX_BYTES` | `10485760` | 원본 다운로드 최대 바이트(10MB). 초과 시 413 응답 |
+| `OUTPUT_MAX_BYTES` | `10485760` | 최적화 결과 최대 바이트(10MB). 초과 시 413 응답 |
+| `SHARP_MAX_PIXELS` | `16000000` | Sharp 입력 픽셀 상한(약 16MP). 초과 시 거부 |
 
 > 개발 모드에서는 `.env`, 운영 모드(`NODE_ENV=production`)에서는 `.env.production`을 자동으로 불러옵니다.
 
@@ -89,6 +93,18 @@ GET /?u=<image-url>&w=<width>&h=<height>&ref=<referer>
    pm2 save
    pm2 startup   # 출력되는 명령을 그대로 실행
    ```
+
+### PM2 최적화 옵션
+- `ecosystem.config.cjs`에 기본 운영 보호 설정이 포함되어 있습니다.
+  - `max_memory_restart: '512M'`: 프로세스 메모리가 512MB를 초과하면 자동 재시작합니다.
+  - `exp_backoff_restart_delay: 100`: 재시작 루프를 지수 백오프로 완화합니다.
+- 필요 시 메모리 한도를 인프라 사양에 맞게 조정하세요.
+
+## 리소스 가드/타임아웃 동작
+- 원본 타임아웃: `ORIGIN_TIMEOUT_MS`(기본 5초) 초과 시 원본 요청을 중단하고 `504`를 반환합니다.
+- 원본 크기 제한: 응답 `Content-Length` 또는 스트림 누적 크기가 `ORIGIN_MAX_BYTES`(기본 10MB)를 넘으면 즉시 중단하고 `413`을 반환합니다.
+- 변환 픽셀 제한: `SHARP_MAX_PIXELS`를 넘는 입력은 Sharp에서 거부됩니다.
+- 결과 크기 제한: 변환 결과가 `OUTPUT_MAX_BYTES`를 초과하면 `413`을 반환합니다.
 
 ## 배포 팁
 - 허용되지 않은 도메인은 400으로 차단되므로 도메인 변경 시 즉시 `ALLOWED_DOMAINS`를 갱신하세요.
