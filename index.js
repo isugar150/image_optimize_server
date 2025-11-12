@@ -5,6 +5,8 @@ import winston from 'winston';
 import DailyRotateFile from 'winston-daily-rotate-file';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+import { Transform } from 'stream';
 import { createClient } from 'redis';
 import dotenv from 'dotenv';
 
@@ -29,6 +31,11 @@ const LOCK_WAIT_TIMEOUT_MS = parseInt(process.env.LOCK_WAIT_TIMEOUT_MS || '10000
 const LOCK_RETRY_DELAY_MS = parseInt(process.env.LOCK_RETRY_DELAY_MS || '150', 10);
 
 const app = express();
+
+// Tune sharp to reduce process RSS
+// Keep a small cache and moderate concurrency to avoid ballooning memory when under load.
+sharp.cache({ memory: 32, files: 0, items: 0 });
+sharp.concurrency(Math.min(4, Math.max(1, os.cpus().length)));
 
 // Allowlist: supports either full URL prefixes (e.g., https://cdn.example.com/dir)
 // or plain domains (e.g., cdn.example.com). Domains will match regardless of scheme
@@ -222,7 +229,7 @@ app.get('/', async (req, res) => {
           if(!ok) {
             await redisClient.del(cacheKey);
           } else {
-            logger.info(`Cache hit: ${cacheKey}`);
+            logger.debug(`Cache hit: ${cacheKey}`);
             res.set('Content-Type', 'image/webp');
             res.set('Cache-Control', 'public, max-age=31536000');
             res.set('X-Cache', 'HIT');
@@ -276,7 +283,7 @@ app.get('/', async (req, res) => {
       haveLock = await tryAcquireLock();
     }
 
-    logger.info(`Cache miss: ${cacheKey}, fetching with url: ${originUrl.toString()}`);
+  logger.info(`Cache miss: ${cacheKey}, fetching with url: ${originUrl.toString()}`);
 
     const refererFromClient = typeof req.query.ref === 'string' ? req.query.ref : null;
     const refererHeader = (() => {
@@ -291,7 +298,7 @@ app.get('/', async (req, res) => {
       try {
         const cachedAfterWait = await redisClient.sendCommand(['GET', cacheKey], { returnBuffers: true });
         if (cachedAfterWait) {
-          logger.info(`Cache hit after wait: ${cacheKey}`);
+          logger.debug(`Cache hit after wait: ${cacheKey}`);
           res.set('Content-Type', 'image/webp');
           res.set('Cache-Control', 'public, max-age=31536000');
           res.set('X-Cache', 'HIT-AFTER-WAIT');
@@ -308,7 +315,25 @@ app.get('/', async (req, res) => {
     const timeoutId = setTimeout(() => {
       try { controller.abort(); } catch (_) {}
     }, ORIGIN_TIMEOUT_MS);
-    let imageBuffer;
+    // Streamed processing (no full origin buffering)
+    // Custom transform to enforce a hard byte limit on origin stream
+    class ByteLimit extends Transform {
+      constructor(limit) {
+        super();
+        this.limit = limit;
+        this.total = 0;
+      }
+      _transform(chunk, enc, cb) {
+        this.total += chunk.length;
+        if (this.total > this.limit) {
+          cb(Object.assign(new Error('ORIGIN_MAX_BYTES_EXCEEDED'), { code: 'ORIGIN_MAX_BYTES_EXCEEDED' }));
+        } else {
+          cb(null, chunk);
+        }
+      }
+    }
+    let limiter;
+    let transformer;
     try {
       const response = await fetch(originUrl.toString(), {
         redirect: 'follow',
@@ -335,23 +360,64 @@ app.get('/', async (req, res) => {
           return res.status(413).send('Origin image too large');
         }
       }
-      // Stream and cap by ORIGIN_MAX_BYTES
-      const chunks = [];
-      let total = 0;
-      for await (const chunk of response.body) {
-        total += chunk.length;
-        if (total > ORIGIN_MAX_BYTES) {
-          logger.warn(`Origin stream exceeded max bytes: ${total} > ${ORIGIN_MAX_BYTES}`);
-          try { controller.abort(); } catch (_) {}
-          try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
-          return res.status(413).send('Origin image too large');
-        }
-        chunks.push(chunk);
+      // Piping origin stream through a byte limiter directly into sharp
+      limiter = new ByteLimit(ORIGIN_MAX_BYTES);
+      transformer = sharp({ limitInputPixels: SHARP_MAX_PIXELS }).webp();
+      if (width || height) {
+        logger.info(`Resizing: w=${width}, h=${height}`);
+        transformer = transformer.resize(width || null, height || null, {
+          fit: 'inside',
+          withoutEnlargement: true,
+        });
       }
-      imageBuffer = Buffer.concat(chunks);
-      logger.info(`Origin fetched: ${originUrl.toString()}, ${imageBuffer.length} bytes`);
+      // Start piping
+      response.body.on('error', (e) => logger.error(`Origin stream error: ${e.message || e}`));
+      response.body.pipe(limiter).pipe(transformer);
+      // Collect optimized output buffer (single allocation for Redis + response)
+      const optimizedBuffer = await transformer.toBuffer();
+      if (optimizedBuffer.length > OUTPUT_MAX_BYTES) {
+        logger.warn(`Output buffer too large: ${optimizedBuffer.length} > ${OUTPUT_MAX_BYTES}`);
+        try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
+        return res.status(413).send('Optimized image too large');
+      }
+      logger.info(`Image processed: webp, final size=${optimizedBuffer.length} bytes`);
+
+      // Store in Redis with TTL, then respond
+      if (redisReady) {
+        try {
+          await redisClient.setEx(cacheKey, REDIS_TTL_SECONDS, optimizedBuffer);
+          logger.info(`Cache set: key=${cacheKey} ttl=${REDIS_TTL_SECONDS}s`);
+        } catch (e) {
+          logger.error(`Cache set failed: ${e.message}`);
+        } finally {
+          await releaseLock();
+        }
+      }
+      res.set('Content-Type', 'image/webp');
+      if (redisReady) {
+        res.set('Cache-Control', 'public, max-age=31536000');
+      } else {
+        res.set('Cache-Control', 'no-store');
+      }
+      if (redisReady) {
+        res.set('X-Cache', haveLock ? 'MISS-LOCK' : 'MISS');
+      } else {
+        res.set('X-Cache', 'MISS-NO-REDIS');
+      }
+      try {
+        res.send(optimizedBuffer);
+      } finally {
+        // Proactively drop large references for GC
+        try { transformer?.destroy(); } catch (_) {}
+        try { limiter?.destroy(); } catch (_) {}
+      }
     } catch (e) {
       const isAbort = e && (e.name === 'AbortError' || String(e).includes('AbortError'));
+      if (e && e.code === 'ORIGIN_MAX_BYTES_EXCEEDED') {
+        logger.warn(`Origin stream exceeded max bytes (stream): limit=${ORIGIN_MAX_BYTES}`);
+        try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
+        return res.status(413).send('Origin image too large');
+      }
       if (isAbort) {
         logger.warn(`Origin fetch timeout after ${ORIGIN_TIMEOUT_MS}ms: ${originUrl.toString()}`);
         try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
@@ -362,53 +428,6 @@ app.get('/', async (req, res) => {
       return res.status(502).send('Failed to fetch image from origin');
     } finally {
       clearTimeout(timeoutId);
-    }
-
-    let transformer = sharp(imageBuffer, { limitInputPixels: SHARP_MAX_PIXELS }).webp();
-    if (width || height) {
-      logger.info(`Resizing: w=${width}, h=${height}`);
-      transformer = transformer.resize(width || null, height || null, {
-        fit: 'inside',
-        withoutEnlargement: true,
-      });
-    }
-    const optimizedBuffer = await transformer.toBuffer();
-    if (optimizedBuffer.length > OUTPUT_MAX_BYTES) {
-      logger.warn(`Output buffer too large: ${optimizedBuffer.length} > ${OUTPUT_MAX_BYTES}`);
-      // Ensure lock is released before returning
-      try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
-      return res.status(413).send('Optimized image too large');
-    }
-    logger.info(`Image processed: webp, final size=${optimizedBuffer.length} bytes`);
-
-    // Store in Redis with TTL
-    if (redisReady) {
-      try {
-        await redisClient.setEx(cacheKey, REDIS_TTL_SECONDS, optimizedBuffer);
-        logger.info(`Cache set: key=${cacheKey} ttl=${REDIS_TTL_SECONDS}s`);
-      } catch (e) {
-        logger.error(`Cache set failed: ${e.message}`);
-      } finally {
-        await releaseLock();
-      }
-    }
-    res.set('Content-Type', 'image/webp');
-    if (redisReady) {
-      res.set('Cache-Control', 'public, max-age=31536000');
-    } else {
-      // Do not allow downstream caching when Redis is unavailable
-      res.set('Cache-Control', 'no-store');
-    }
-    if (redisReady) {
-      res.set('X-Cache', haveLock ? 'MISS-LOCK' : 'MISS');
-    } else {
-      res.set('X-Cache', 'MISS-NO-REDIS');
-    }
-    try {
-      res.send(optimizedBuffer);
-    } finally {
-      // Safety: release lock on any send error too
-      try { if (redisReady && haveLock) await releaseLock(); } catch (_) {}
     }
   } catch (err) {
     logger.error(`Error: ${err.toString()}`);
