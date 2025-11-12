@@ -237,7 +237,7 @@ app.get('/', async (req, res) => {
           } else {
             logger.debug(`Cache hit: ${cacheKey}`);
             res.set('Content-Type', 'image/webp');
-            res.set('Cache-Control', 'public, max-age=31536000');
+            res.set('Cache-Control', 's-maxage=31536000, max-age=0');
             res.set('X-Cache', 'HIT');
             return res.send(cachedImg);
           }
@@ -278,7 +278,7 @@ app.get('/', async (req, res) => {
           if (cached) {
             logger.info(`Cache filled while waiting: ${cacheKey}`);
             res.set('Content-Type', 'image/webp');
-            res.set('Cache-Control', 'public, max-age=31536000');
+            res.set('Cache-Control', 's-maxage=31536000, max-age=0');
             res.set('X-Cache', 'HIT-WAIT');
             return res.send(cached);
           }
@@ -306,7 +306,7 @@ app.get('/', async (req, res) => {
         if (cachedAfterWait) {
           logger.debug(`Cache hit after wait: ${cacheKey}`);
           res.set('Content-Type', 'image/webp');
-          res.set('Cache-Control', 'public, max-age=31536000');
+          res.set('Cache-Control', 's-maxage=31536000, max-age=0');
           res.set('X-Cache', 'HIT-AFTER-WAIT');
           return res.send(cachedAfterWait);
         }
@@ -401,7 +401,7 @@ app.get('/', async (req, res) => {
       }
       res.set('Content-Type', 'image/webp');
       if (redisReady) {
-        res.set('Cache-Control', 'public, max-age=31536000');
+        res.set('Cache-Control', 's-maxage=31536000, max-age=0');
       } else {
         res.set('Cache-Control', 'no-store');
       }
