@@ -7,6 +7,8 @@ module.exports = {
       exec_mode: 'cluster',
       max_memory_restart: '512M',
       exp_backoff_restart_delay: 100,
+      autorestart: true,
+      restart_delay: 1000,
       watch: false,
       env_file: {
         development: '.env',
