@@ -204,8 +204,14 @@ app.get('/', async (req, res) => {
 
     const validExt = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
     const extname = path.extname(originUrl.pathname).toLowerCase();
-    if (!validExt.includes(extname)) {
-      logger.info(`Skip (not image): ${originUrl.toString()}`);
+
+    const isImageLike =
+       validExt.includes(extname) ||
+       /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(originUrl.toString()) ||
+       /\/(resize|thumbnail|image|images)\//i.test(originUrl.pathname);
+
+    if (!isImageLike) {
+      logger.info(`Skip (not image-like): ${originUrl.toString()}`);
       return res.status(400).send('Not an image url');
     }
 
