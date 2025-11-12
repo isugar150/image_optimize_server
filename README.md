@@ -29,7 +29,7 @@
 | `REDIS_PORT` | `6379` | Redis 포트 |
 | `REDIS_PASSWORD` | _(없음)_ | Redis 비밀번호 (필요 시) |
 | `REDIS_DB` | `0` | Redis 논리 DB 인덱스 |
-| `ALLOWED_DOMAINS` | _필수_ | 허용 원본 도메인 또는 URL 접두어(쉼표 구분). 구버전 호환: `ALLOWED_PREFIXES` |
+| `ALLOWED_DOMAINS` | _필수_ | 허용 원본 도메인 또는 URL 접두어(쉼표 구분). |
 | `REDIS_TTL_SECONDS` | `3600` | 최적화 이미지 캐시 TTL(초) |
 | `LOCK_TTL_SECONDS` | `30` | Redis 락 유지 시간(초) |
 | `LOCK_WAIT_TIMEOUT_MS` | `10000` | 다른 워커의 락을 기다리는 최대 시간(밀리초) |
