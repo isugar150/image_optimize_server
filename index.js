@@ -73,13 +73,25 @@ if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 
 // 공통 포맷(서울 타임스탬프)
 const tzTimestamp = winston.format((info) => {
-  const now = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false });
-  info.timestamp = now;
+  const now = new Date();
+
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+
+  const HH = String(now.getHours()).padStart(2, '0');
+  const MM = String(now.getMinutes()).padStart(2, '0');
+  const SS = String(now.getSeconds()).padStart(2, '0');
+  const SSS = String(now.getMilliseconds()).padStart(3, '0');
+
+  info.timestamp = `${yyyy}-${mm}-${dd} ${HH}:${MM}:${SS}.${SSS}`;
   return info;
 })();
 
+const CLUSTER_INSTANCE = process.env.NODE_APP_INSTANCE ?? 'fork';
+
 const logFormat = winston.format.printf(({ timestamp, level, message, stack }) => {
-  return `[${timestamp}] ${level}: ${stack || message}`;
+  return `[${timestamp}] [cluster:${CLUSTER_INSTANCE}] ${level}: ${stack || message}`;
 });
 
 // 일일 롤링 파일 트랜스포트
@@ -106,7 +118,7 @@ export const logger = winston.createLogger({
         tzTimestamp,
         winston.format.colorize(),
         logFormat
-      )
+      ),
     }),
     rotateTransport
   ],
