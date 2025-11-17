@@ -380,7 +380,13 @@ app.get('/', async (req, res) => {
       }
       // Piping origin stream through a byte limiter directly into sharp
       limiter = new ByteLimit(ORIGIN_MAX_BYTES);
-      transformer = sharp({ limitInputPixels: SHARP_MAX_PIXELS }).webp();
+
+      // 1) 입력: animated 허용
+      transformer = sharp({
+        limitInputPixels: SHARP_MAX_PIXELS,
+        animated: true,
+      });
+
       if (width || height) {
         logger.info(`Resizing: w=${width}, h=${height}`);
         transformer = transformer.resize(width || null, height || null, {
@@ -388,10 +394,20 @@ app.get('/', async (req, res) => {
           withoutEnlargement: true,
         });
       }
-      // Start piping
-      response.body.on('error', (e) => logger.error(`Origin stream error: ${e.message || e}`));
+
+      // 2) 출력: animated webp
+      transformer = transformer.webp({
+        animated: true,
+        quality: 80,
+        effort: 4,
+      });
+
+      // 3) 스트림 파이프 & 버퍼
+      response.body.on('error', (e) =>
+        logger.error(`Origin stream error: ${e.message || e}`)
+      );
       response.body.pipe(limiter).pipe(transformer);
-      // Collect optimized output buffer (single allocation for Redis + response)
+
       const optimizedBuffer = await transformer.toBuffer();
       if (optimizedBuffer.length > OUTPUT_MAX_BYTES) {
         logger.warn(`Output buffer too large: ${optimizedBuffer.length} > ${OUTPUT_MAX_BYTES}`);
