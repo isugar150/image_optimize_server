@@ -110,3 +110,48 @@ GET /?u=<image-url>&w=<width>&h=<height>&ref=<referer>
 - 허용되지 않은 도메인은 400으로 차단되므로 도메인 변경 시 즉시 `ALLOWED_DOMAINS`를 갱신하세요.
 - Redis 캐시는 TTL에 따라 메모리를 사용하므로 인스턴스 용량에 맞게 `REDIS_TTL_SECONDS`를 조정하세요.
 - 추후 자동화 테스트를 추가한다면 Jest + Supertest 조합을 권장합니다 (`npm test`).
+
+## 예시 프론트엔드 코드
+- 첫 번째로 프록시 URL 호출 실패시 원본 URL 호출 실패시 오류 이미지 표출
+- 아래는 lazysizes 라이브러리를 사용한 예시코드입니다.
+  ``` javascript
+   document.addEventListener('lazybeforeunveil', function(e) {
+     const el = e.target;
+   
+     if (!el.classList.contains('lazyload')) return;
+   
+     let src = el.dataset.src;
+     if (src) {
+       if (src.startsWith('//')) {
+         src = window.location.protocol + src;
+       } else if (src.startsWith('/')) {
+         src = window.location.origin + src;
+       }
+     }
+     const width = el.dataset.width;
+     const height = el.dataset.height;
+     const errorImage = "https://img.example.com/error.webp";
+   
+     if (!src) return;
+   
+     const params = new URLSearchParams();
+     if (width) params.set('w', width);
+     if (height) params.set('h', height);
+     params.set('u', src);
+   
+     const proxyUrl = `https://img.example.com/?${params.toString()}`;
+   
+     el.setAttribute('data-src', proxyUrl);
+   
+     el.onerror = function retryOnError() {
+       if (el.getAttribute('src') === proxyUrl) {
+         el.onerror = () => el.src = errorImage;
+         el.src = src;
+       } else {
+         el.src = errorImage;
+       }
+     };
+   });
+
+  <img class="lazyload" data-width="200" data-src="" />
+  ```
