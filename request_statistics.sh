@@ -15,7 +15,7 @@
 IMG_LOG_DIR="/app/image_optimize_server/logs"
 NGINX_LOG_DIR="/var/log/nginx"
 
-echo -e "DATE\tCACHE_SET\tNGINX_GET"
+echo -e "DATE\t\tCACHE_SET\tNGINX_GET"
 
 for file in "$IMG_LOG_DIR"/image-proxy-*.log*; do
   fname=$(basename "$file")
@@ -29,5 +29,5 @@ for file in "$IMG_LOG_DIR"/image-proxy-*.log*; do
                 | grep -o "\"GET /" \
                 | wc -l)
 
-  echo -e "$date\t$cache_count\t$nginx_count"
+  echo -e "$date\t$cache_count\t\t$nginx_count"
 done
