@@ -67,10 +67,27 @@ GET /?u=<image-url>&w=<width>&h=<height>&ref=<referer>
 - `logs/` 디렉터리에 Daily Rotate 로그(`image-proxy-YYYY-MM-DD.log`)가 생성됩니다.
 - 콘솔과 파일 모두 Asia/Seoul 타임스탬프를 사용하며, 예외/Unhandled rejection 전용 로그도 분리 저장됩니다.
 
-## 샘플 클라이언트
-`sample/` 폴더에는 브라우저 예제가 포함됩니다.
-- `sample/index.html`: 사용 가이드와 데모 이미지.
-- `sample/proxy-loader.js`: `<img data-origin="...">` 속성을 읽어 프록시 URL(`/?u=...&w=...`)을 자동으로 구성.
+## 로그 기반 상태 확인(`/status`)
+- 서버는 `/status` 엔드포인트로 간단한 텍스트 상태 정보를 제공합니다.
+- 내부적으로 `request_statistics.sh` 스크립트를 실행해 **애플리케이션 로그(`logs/`) + Nginx access 로그**를 읽고, 날짜별 통계를 집계합니다.
+- Docker 이미지/배포 예시에서는 이 스크립트와 Nginx 로그 경로가 이미 맞춰져 있습니다.
+
+예시:
+```bash
+curl http://localhost:3000/status
+```
+
+예상 출력 형식:
+```text
+DATE        CACHE_SET   NGINX_GET   UNIQUE_CLIENTS
+2025-11-17  123         456         12
+2025-11-18  78          210         8
+```
+
+- `CACHE_SET`: 해당 날짜에 애플리케이션 로그에서 `Cache set:`이 기록된 횟수(최적화 이미지가 새로 생성되어 Redis에 저장된 횟수).
+- `NGINX_GET`: Nginx access 로그 기준 `/` 경로(프록시 엔드포인트)에 대한 GET 요청 수.
+- `UNIQUE_CLIENTS`: 같은 조건에서의 고유 클라이언트 IP 개수.
+- `request_statistics.sh`가 없거나 오류가 발생하면 `/status`는 500 상태 코드를 반환합니다.
 
 로컬 테스트 순서:
 1. `npm start`로 서버 실행.
@@ -99,6 +116,57 @@ GET /?u=<image-url>&w=<width>&h=<height>&ref=<referer>
   - `max_memory_restart: '512M'`: 프로세스 메모리가 512MB를 초과하면 자동 재시작합니다.
   - `exp_backoff_restart_delay: 100`: 재시작 루프를 지수 백오프로 완화합니다.
 - 필요 시 메모리 한도를 인프라 사양에 맞게 조정하세요.
+
+## Docker 실행 가이드
+컨테이너 안에서는 `NODE_ENV=production`, `PORT=3000`으로 자동 설정되며, Nginx(80포트)가 프록시로 앞단에 서고 Node 앱은 3000 포트에서 동작합니다.
+
+### 1) Docker 이미지 빌드
+프로젝트 루트에서 다음 명령으로 이미지를 빌드합니다.
+```bash
+docker build -t img-optimize:latest .
+```
+
+### 2) Docker 단일 컨테이너 실행 (외부 Redis 사용)
+이미 Redis 인스턴스가 별도로 존재하는 경우 다음과 같이 실행할 수 있습니다.
+```bash
+docker run -d \
+  --name img-optimize \
+  -e ALLOWED_DOMAINS="cafe24img.poxo.com,https://img.yourbrand.com/" \
+  -e REDIS_HOST="your-redis-host" \
+  -e REDIS_PORT="6379" \
+  -p 3000:80 \
+  img-optimize:latest
+```
+- 호스트에서 접속 URL: `http://localhost:3000/?u=...`
+- 컨테이너 환경 변수는 내부에서 `.env.production`으로 변환되어 앱이 사용하는 값이 됩니다.
+- `ALLOWED_DOMAINS`는 빈 값이면 서버가 바로 종료되므로 반드시 설정해야 합니다.
+
+### 3) docker-compose로 앱 + Redis 함께 실행
+`docker-compose.yml`이 포함되어 있으므로, 루트 디렉터리에 `.env`(또는 원하는 이름의 환경 파일)를 생성해 앱 관련 환경 변수를 정의합니다.
+예시(`.env`):
+```bash
+ALLOWED_DOMAINS=cafe24img.poxo.com,https://img.yourbrand.com/
+ORIGIN_TIMEOUT_MS=5000
+ORIGIN_MAX_BYTES=10485760
+OUTPUT_MAX_BYTES=10485760
+SHARP_MAX_PIXELS=64000000
+```
+
+컨테이너 실행:
+```bash
+docker compose up -d
+# 구 버전 Docker Compose를 사용하는 경우
+docker-compose up -d
+```
+
+- 앱 컨테이너: `img-optimize` (포트 매핑 `3000:80`)
+- Redis 컨테이너: `img-redis` (포트 매핑 `16379:6379` – 필요 시만 호스트에서 사용)
+- 로그 확인:
+  ```bash
+  docker logs -f img-optimize
+  # 또는
+  docker compose logs -f img-optimize
+  ```
 
 ## 리소스 가드/타임아웃 동작
 - 원본 타임아웃: `ORIGIN_TIMEOUT_MS`(기본 5초) 초과 시 원본 요청을 중단하고 `504`를 반환합니다.
