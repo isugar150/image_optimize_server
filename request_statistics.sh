@@ -15,19 +15,27 @@
 IMG_LOG_DIR="/app/image_optimize_server/logs"
 NGINX_LOG_DIR="/var/log/nginx"
 
-echo -e "DATE\t\tCACHE_SET\tNGINX_GET"
+echo -e "DATE\t\tCACHE_SET\tNGINX_GET\tUNIQUE_CLIENTS"
 
 for file in "$IMG_LOG_DIR"/image-proxy-*.log*; do
   fname=$(basename "$file")
   date=$(echo "$fname" | sed -E 's/image-proxy-([0-9]{4}-[0-9]{2}-[0-9]{2}).*/\1/')
 
+  # Cache set count
   cache_count=$(zgrep -h "$date" "$file" 2>/dev/null \
                 | grep -o "Cache set:" \
                 | wc -l)
 
+  # Nginx GET count
   nginx_count=$(zgrep -h "$date" "$NGINX_LOG_DIR"/access.log* 2>/dev/null \
                 | grep -o "\"GET /" \
                 | wc -l)
 
-  echo -e "$date\t$cache_count\t\t$nginx_count"
+  # Unique client IP count
+  unique_clients=$(zgrep -h "$date" "$NGINX_LOG_DIR"/access.log* 2>/dev/null \
+                    | awk '{print $1}' \
+                    | sort -u \
+                    | wc -l)
+
+  echo -e "$date\t$cache_count\t\t$nginx_count\t\t$unique_clients"
 done
