@@ -9,6 +9,7 @@ import os from 'os';
 import { Transform } from 'stream';
 import { createClient } from 'redis';
 import dotenv from 'dotenv';
+import { exec } from 'child_process';
 
 // Load environment variables (.env in dev, .env.production in prod)
 const envPath = process.env.NODE_ENV === 'production' ? '.env.production' : '.env';
@@ -68,8 +69,10 @@ for (const entry of ALLOWED_RAW) {
 }
 
 // 로그 폴더 준비
-const LOG_DIR = path.join(process.cwd(), 'logs');
+const ROOT_DIR = process.env.APP_ROOT_DIR || process.cwd();
+const LOG_DIR = path.join(ROOT_DIR, 'logs');
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
+const STATUS_SCRIPT_PATH = path.join(process.cwd(), 'request_statistics.sh');
 
 // 공통 포맷(서울 타임스탬프)
 const tzTimestamp = winston.format((info) => {
@@ -121,24 +124,6 @@ export const logger = winston.createLogger({
       ),
     }),
     rotateTransport
-  ],
-  exceptionHandlers: [
-    new DailyRotateFile({
-      dirname: LOG_DIR,
-      filename: 'exceptions-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      zippedArchive: true,
-      maxFiles: '7d'
-    })
-  ],
-  rejectionHandlers: [
-    new DailyRotateFile({
-      dirname: LOG_DIR,
-      filename: 'rejections-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      zippedArchive: true,
-      maxFiles: '7d'
-    })
   ]
 });
 
@@ -160,6 +145,26 @@ try {
 } catch (e) {
   logger.error(`Redis connect failed: ${e.message}`);
 }
+
+app.get('/status', (req, res) => {
+  if (!fs.existsSync(STATUS_SCRIPT_PATH)) {
+    return res.status(500).send('request_statistics.sh not found');
+  }
+
+  exec(`bash "${STATUS_SCRIPT_PATH}"`, {
+    cwd: ROOT_DIR,
+    env: {
+      ...process.env,
+      IMG_LOG_DIR: LOG_DIR,
+    },
+  }, (error, stdout, stderr) => {
+    if (error) {
+      logger.error(`Status script error: ${error.message} ${stderr || ''}`);
+      return res.status(500).send('Failed to collect status');
+    }
+    res.type('text/plain').send(stdout || '');
+  });
+});
 
 app.get('/', async (req, res) => {
   try {
