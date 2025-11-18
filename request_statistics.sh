@@ -17,8 +17,10 @@ NGINX_LOG_DIR="/var/log/nginx"
 
 echo -e "DATE\t\tCACHE_SET\tNGINX_GET\tUNIQUE_CLIENTS"
 
-# 현재(압축되지 않은) 이미지 프록시 로그만 대상으로 집계
-log_files=$(find "$IMG_LOG_DIR" -maxdepth 1 -type f -name 'image-proxy-*.log' 2>/dev/null | sort)
+log_files=$(find "$IMG_LOG_DIR" -maxdepth 1 -type f \( -name 'image-proxy-*.log' -o -name 'image-proxy-*.log*.gz' \) 2>/dev/null | sort)
+
+nginx_plain_logs=$(find "$NGINX_LOG_DIR" -maxdepth 1 -type f -name 'access.log*' ! -name '*.gz' 2>/dev/null | sort)
+nginx_gz_logs=$(find "$NGINX_LOG_DIR" -maxdepth 1 -type f -name 'access.log*.gz' 2>/dev/null | sort)
 
 if [ -z "$log_files" ]; then
   echo "No image-proxy logs found in $IMG_LOG_DIR" >&2
@@ -30,19 +32,41 @@ for file in $log_files; do
   date=$(echo "$fname" | sed -E 's/image-proxy-([0-9]{4}-[0-9]{2}-[0-9]{2}).*/\1/')
 
   # Cache set count
-  cache_count=$(grep -h "Cache set:" "$file" 2>/dev/null | wc -l)
+  if [[ "$file" == *.gz ]]; then
+    cache_count=$(zgrep -h "Cache set:" "$file" 2>/dev/null | wc -l)
+  else
+    cache_count=$(grep -h "Cache set:" "$file" 2>/dev/null | wc -l)
+  fi
 
   # Nginx GET count - only root path ("/" or "/?") requests
-  nginx_count=$(grep -h "$date" "$NGINX_LOG_DIR"/access.log* 2>/dev/null \
-                | grep -E '"GET /(\?| HTTP/)' \
-                | wc -l)
+  nginx_count=$(
+    {
+      if [ -n "$nginx_plain_logs" ]; then
+        cat $nginx_plain_logs 2>/dev/null
+      fi
+      if [ -n "$nginx_gz_logs" ]; then
+        zcat $nginx_gz_logs 2>/dev/null
+      fi
+    } | grep "$date" 2>/dev/null \
+      | grep -E '"GET /(\?| HTTP/)' \
+      | wc -l
+  )
 
   # Unique client IP count - only for root path requests
-  unique_clients=$(grep -h "$date" "$NGINX_LOG_DIR"/access.log* 2>/dev/null \
-                    | grep -E '"GET /(\?| HTTP/)' \
-                    | awk '{print $1}' \
-                    | sort -u \
-                    | wc -l)
+  unique_clients=$(
+    {
+      if [ -n "$nginx_plain_logs" ]; then
+        cat $nginx_plain_logs 2>/dev/null
+      fi
+      if [ -n "$nginx_gz_logs" ]; then
+        zcat $nginx_gz_logs 2>/dev/null
+      fi
+    } | grep "$date" 2>/dev/null \
+      | grep -E '"GET /(\?| HTTP/)' \
+      | awk '{print $1}' \
+      | sort -u \
+      | wc -l
+  )
 
   echo -e "$date\t$cache_count\t\t$nginx_count\t\t$unique_clients"
 done
