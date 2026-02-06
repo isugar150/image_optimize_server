@@ -1,15 +1,20 @@
 # 이미지 최적화 프록시 서버
 
 이미지를 프록시로 받아 WebP로 변환하고 Redis에 캐싱하는 Express 서버입니다. 허용된 도메인만 통신하며, Sharp/Redis/Winston을 이용해 최적화·캐시·로깅을 처리합니다.
+### 성능 개선 지표
+<img width="886" height="204" alt="image1" src="https://github.com/user-attachments/assets/ba510639-ae45-4403-a0e4-0c635976a06d" />
+<img width="1208" height="557" alt="image2" src="https://github.com/user-attachments/assets/ee6e2bbe-732c-4612-a3f0-70d94a418623" />
 
-<img width="703" height="477" alt="image" src="https://github.com/user-attachments/assets/f8f95f7d-5201-4a0f-b891-76c3d4f891d3" />
-
+### 개선률
 | 조건 | 기존 로딩 시간 | 개선 후 로딩 시간 | 개선률 |
 |---|---:|---:|---:|
 | 네트워크 속도 3Mbps 제한 | 180초 | 32초 | 약 5.6배 |
 | 네트워크 속도 제한 없음 | 9.1초 | 4.29초 | 약 2.1배 |
 | 네트워크 속도 제한 없음, CPU 제한 | 26초 | 15.99초 | 약 1.6배 |
 | 네트워크 속도 3Mbps 제한, CPU 제한 | 184초 | 28.03초 | 약 6.2배 |
+
+### 네트워크 구성 설명
+<img width="703" height="477" alt="image" src="https://github.com/user-attachments/assets/f8f95f7d-5201-4a0f-b891-76c3d4f891d3" />
 
 ## 빠른 시작
 1. **패키지 설치**
