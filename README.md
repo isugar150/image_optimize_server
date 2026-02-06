@@ -2,6 +2,8 @@
 
 이미지를 프록시로 받아 WebP로 변환하고 Redis에 캐싱하는 Express 서버입니다. 허용된 도메인만 통신하며, Sharp/Redis/Winston을 이용해 최적화·캐시·로깅을 처리합니다.
 
+<img width="703" height="477" alt="image" src="https://github.com/user-attachments/assets/f8f95f7d-5201-4a0f-b891-76c3d4f891d3" />
+
 | 조건 | 기존 로딩 시간 | 개선 후 로딩 시간 | 개선률 |
 |---|---:|---:|---:|
 | 네트워크 속도 3Mbps 제한 | 180초 | 32초 | 약 5.6배 |
